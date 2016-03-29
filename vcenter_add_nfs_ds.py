@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 #
 # (c) 2015, Joseph Callen <jcallen () csc.com>
-# Copyright (C) 2015 VMware, Inc.
+# Portions Copyright (c) 2015 VMware, Inc. All rights reserved.
 #
 # This file is part of Ansible
 #
