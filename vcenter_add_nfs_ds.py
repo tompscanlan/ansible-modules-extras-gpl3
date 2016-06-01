@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 #
 # (c) 2015, Joseph Callen <jcallen () csc.com>
 # Portions Copyright (c) 2015 VMware, Inc. All rights reserved.
@@ -103,53 +103,17 @@ EXAMPLE = '''
 '''
 
 try:
-    import atexit
-    import time
-    import requests
-    import sys
-    import collections
-    from pyVim import connect
     from pyVmomi import vim, vmodl
-
     HAS_PYVMOMI = True
 except ImportError:
     HAS_PYVMOMI = False
 
 
-def connect_to_vcenter(module, disconnect_atexit=True):
-    hostname = module.params['host']
-    username = module.params['login']
-    password = module.params['password']
-    port = module.params['port']
-
-    try:
-        service_instance = connect.SmartConnect(
-            host=hostname,
-            user=username,
-            pwd=password,
-            port=port
-        )
-
-        if disconnect_atexit:
-            atexit.register(connect.Disconnect, service_instance)
-
-        return service_instance.RetrieveContent()
-    except vim.fault.InvalidLogin, invalid_login:
-        module.fail_json(msg=invalid_login.msg, apierror=str(invalid_login))
-    except requests.ConnectionError, connection_error:
-        module.fail_json(msg="Unable to connect to vCenter or ESXi API on TCP/443.", apierror=str(connection_error))
-
-
-def get_all_objects(content, vimtype):
-    obj = {}
-    container = content.viewManager.CreateContainerView(content.rootFolder, vimtype, True)
-    for managed_object_ref in container.view:
-        obj.update({managed_object_ref: managed_object_ref.name})
-    return obj
+vc = {}
 
 
 def find_vcenter_object_by_name(content, vimtype, object_name):
-    vcenter_object = get_all_objects(content, [vimtype])
+    vcenter_object = get_all_objs(content, [vimtype])
 
     for k, v in vcenter_object.items():
         if v == object_name:
@@ -174,52 +138,66 @@ def nfs_spec(module):
         localPath=nfs_local_name,
         accessMode=nfs_access_mode,
         type=nfs_type,
-        userName=nfs_username,
-        password=nfs_password,
     )
+
+    if nfs_username and nfs_password:
+        nfs_config_spec.userName = nfs_username
+        nfs_config_spec.password = nfs_password
 
     return nfs_config_spec
 
 
 def check_host_added_to_nfs_ds(module):
 
-    nfs_ds = module.params['nfs']
-    host = module.params['host']
+    state = None
+
+    nfs_ds = vc['nfs']
+    host = vc['host']
 
     for esxhost in nfs_ds.host:
         if esxhost.key == host:
-            return True
-    else:
-        return None
+            state = True
+
+    return state
 
 
 def state_exit_unchanged(module):
-    module.exit_json(change=False)
+    module.exit_json(change=False, msg="EXIT UNCHANGED")
+
 
 def state_delete_nfs(module):
 
-    host = module.params['host']
-    ds = module.params['nfs']
+    changed = False
+    result = None
+
+    host = vc['host']
+    ds = vc['nfs']
 
     try:
         host.configManager.datastoreSystem.RemoveDatastore(ds)
+        changed = True
+        result = "Removed Datastore: {}".format(ds.name)
     except Exception as e:
         module.fail_json(msg="Failed to remove datastore: %s" % str(e))
 
-    result_msg = "Unmounted: %s from host: %s" % (ds.name, host.name)
-    module.exit_json(changed=True, result=result_msg)
+    module.exit_json(changed=changed, result=result)
 
 def state_create_nfs(module):
 
-    host = module.params['host']
+    changed = False
+    result = None
+
+    host = vc['host']
     ds_spec = nfs_spec(module)
 
     try:
         ds = host.configManager.datastoreSystem.CreateNasDatastore(ds_spec)
+        changed = True
+        result = ds.name
     except vim.fault.DuplicateName as duplicate_name:
         module.fail_json(msg="Failed duplicate name: %s" % duplicate_name)
     except vim.fault.AlreadyExists as already_exists:
-        module.fail_json(msg="Failed already exists on host: %s" % already_exists)
+        module.exit_json(changed=False, result=str(already_exists))
     except vim.HostConfigFault as config_fault:
         module.fail_json(msg="Failed to configure nfs on host: %s" % config_fault.msg)
     except vmodl.fault.InvalidArgument as invalid_arg:
@@ -231,28 +209,29 @@ def state_create_nfs(module):
     except vmodl.MethoFault as method_fault:
         module.fail_json(msg="Failed to configure nfs on host method fault: %s" % method_fault.msg)
 
-    result_msg = "Mounted host: %s on nfs: %s" % (host.name, ds.name)
-    module.exit_json(change=True, result=result_msg)
+    module.exit_json(change=changed, result=result)
 
 def check_nfs_host_state(module):
+
     esxi_hostname = module.params['esxi_hostname']
     nfs_ds_name = module.params['nfs_name']
 
-    content = connect_to_vcenter(module)
-    module.params['content'] = content
+    si = connect_to_api(module)
+    vc['si'] = si
 
-    host = find_vcenter_object_by_name(content, vim.HostSystem, esxi_hostname)
+    host = find_hostsystem_by_name(si, esxi_hostname)
 
     if host is None:
-        module.fail_json(msg="Esxi host: %s not in vcenter" % esxi_hostname)
-    module.params['host'] = host
+        module.fail_json(msg="Esxi host: %s not in vcenter".format(esxi_hostname))
 
-    nfs_ds = find_vcenter_object_by_name(content, vim.Datastore, nfs_ds_name)
+    vc['host'] = host
+
+    nfs_ds = find_vcenter_object_by_name(si, vim.Datastore, nfs_ds_name)
 
     if nfs_ds is None:
         return 'absent'
     else:
-        module.params['nfs'] = nfs_ds
+        vc['nfs'] = nfs_ds
 
         if check_host_added_to_nfs_ds(module):
             return 'present'
@@ -262,23 +241,23 @@ def check_nfs_host_state(module):
 
 
 def main():
-    argument_spec = dict(
-        host=dict(required=True, type='str'),
-        login=dict(required=True, type='str'),
-        password=dict(required=True, type='str'),
-        port=dict(required=True, type='int'),
-        esxi_hostname=dict(required=True, type='str'),
-        nfs_host=dict(required=True, type='str'),
-        nfs_path=dict(required=True, type='str'),
-        nfs_name=dict(required=True, type='str'),
-        nfs_access=dict(required=True, type='str'),
-        nfs_type=dict(required=False, type='str'),
-        nfs_username=dict(required=False, type='str'),
-        nfs_password=dict(required=False, type='str'),
-        state=dict(default='present', choices=['present', 'absent'], type='str'),
+    argument_spec = vmware_argument_spec()
+
+    argument_spec.update(
+        dict(
+            esxi_hostname=dict(required=True, type='str'),
+            nfs_host=dict(required=True, type='str'),
+            nfs_path=dict(required=True, type='str'),
+            nfs_name=dict(required=True, type='str'),
+            nfs_access=dict(required=True, type='str'),
+            nfs_type=dict(required=False, type='str'),
+            nfs_username=dict(required=False, type='str'),
+            nfs_password=dict(required=False, type='str'),
+            state=dict(default='present', choices=['present', 'absent'], type='str'),
+        )
     )
 
-    module = AnsibleModule(argument_spec=argument_spec, supports_check_mode=True)
+    module = AnsibleModule(argument_spec=argument_spec, supports_check_mode=False)
 
     if not HAS_PYVMOMI:
         module.fail_json(msg='pyvmomi is required for this module')
@@ -308,6 +287,7 @@ def main():
 
 
 from ansible.module_utils.basic import *
+from ansible.module_utils.vmware import *
 
 if __name__ == '__main__':
     main()

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 #
 # (c) 2015, Joseph Callen <jcallen () csc.com>
 # Portions Copyright (c) 2015 VMware, Inc. All rights reserved.
@@ -28,7 +28,6 @@ description:
       attempt to bind with the bind and admin user, then search for the admin user and bind user
       within the specified user dn tree and optional filter. Will search for a group in the group
       dn tree and optional filter.
-author: Jake Dupuy jdupuy@vmware.com
 credits: VIO Team for all the continued support
 options:
     domain_controller:

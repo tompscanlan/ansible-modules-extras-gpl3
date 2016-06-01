@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 #
 # (c) 2015, Joseph Callen <jcallen () csc.com>
 # Portions Copyright (c) 2015 VMware, Inc. All rights reserved.
@@ -27,7 +27,6 @@ description:
       external provider network for VIO Setup to support the provider type and provider physical network.
       Currently only supports create and delete. IP address's are not validated in this module only that the provided
       gateway and allocation pool ips are within the provided subnet. Intended for use within the chaperone vio role only.
-author: Jake Dupuy jdupuy@vmware.com
 options:
     auth_url:
         description:

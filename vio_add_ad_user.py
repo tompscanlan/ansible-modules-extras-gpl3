@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 #
 # (c) 2015, Joseph Callen <jcallen () csc.com>
 # Portions Copyright (c) 2015 VMware, Inc. All rights reserved.
@@ -26,7 +26,6 @@ description:
       active directory user to a specified project. You must have the VIO cluster using active
       directory as the authentication source. Currently supports add and remove user from specified
       project with desired states 'present' 'absent'.
-author: Jake Dupuy jdupuy@vmware.com
 options:
     auth_url:
         description:

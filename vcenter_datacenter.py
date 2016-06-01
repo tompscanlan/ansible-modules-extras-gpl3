@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 #
 # (c) 2015, Joseph Callen <jcallen () csc.com>
 # Portions Copyright (c) 2015 VMware, Inc. All rights reserved.
@@ -54,10 +54,10 @@ EXAMPLES = '''
 - name: Create Datacenter
   ignore_errors: no
   vcenter_datacenter:
-    host: "{{ vcenter_host }}"
-    login: "{{ vcenter_user }}"
+    hostname: "{{ vcenter_host }}"
+    username: "{{ vcenter_user }}"
     password: "{{ vcenter_password }}"
-    port: "{{ vcenter_port }}"
+    validate_certs: False
     datacenter_name: "{{ datacenter_name }}"
     state: 'present'
   tags:
@@ -65,111 +65,40 @@ EXAMPLES = '''
 '''
 
 try:
-    import atexit
-    import time
-    import requests
-    from pyVim import connect
     from pyVmomi import vim, vmodl
     HAS_PYVMOMI = True
 except ImportError:
     HAS_PYVMOMI = False
 
-
-def connect_to_vcenter(module, disconnect_atexit=True):
-
-    hostname = module.params['host']
-    username = module.params['login']
-    password = module.params['password']
-    port = module.params['port']
-
+def get_datacenter(context, module):
     try:
-        service_instance = connect.SmartConnect(
-            host=hostname,
-            user=username,
-            pwd=password,
-            port=port
-        )
-
-        if disconnect_atexit:
-            atexit.register(connect.Disconnect, service_instance)
-
-        return service_instance.RetrieveContent()
-    except vim.fault.InvalidLogin, invalid_login:
-        module.fail_json(msg=invalid_login.msg, apierror=str(invalid_login))
-    except requests.ConnectionError, connection_error:
-        module.fail_json(msg="Unable to connect to vCenter or ESXi API on TCP/443.", apierror=str(connection_error))
-
-
-def wait_for_task(task):
-    while True:
-        if task.info.state == vim.TaskInfo.State.success:
-            return True, task.info.result
-        if task.info.state == vim.TaskInfo.State.error:
-            try:
-                raise Exception(task.info.error)
-            except AttributeError:
-                raise Exception("An unknown error has occurred")
-        if task.info.state == vim.TaskInfo.State.running:
-            time.sleep(15)
-        if task.info.state == vim.TaskInfo.State.queued:
-            time.sleep(15)
-
-
-def get_all_objs(content, vimtype):
-
-    obj = {}
-    container = content.viewManager.CreateContainerView(content.rootFolder, vimtype, True)
-    for managed_object_ref in container.view:
-        obj.update({managed_object_ref: managed_object_ref.name})
-    return obj
-
-
-def find_datacenter_by_name(content, datacenter_name):
-
-    datacenters = get_all_objs(content, [vim.Datacenter])
-    for dc in datacenters:
-        if dc.name == datacenter_name:
-            return dc
-
-    return None
-
-
-def check_datacenter_state(module):
-    datacenter_name = module.params['datacenter_name']
-
-    try:
-        content = connect_to_vcenter(module)
-        datacenter = find_datacenter_by_name(content, datacenter_name)
-        module.params['content'] = content
-
-        if datacenter is None:
-            return 'absent'
-        else:
-            module.params['datacenter'] = datacenter
-            return 'present'
+        datacenter_name = module.params.get('datacenter_name')
+        datacenter = find_datacenter_by_name(context, datacenter_name)
+        return datacenter
     except vmodl.RuntimeFault as runtime_fault:
         module.fail_json(msg=runtime_fault.msg)
     except vmodl.MethodFault as method_fault:
         module.fail_json(msg=method_fault.msg)
 
 
-def state_create_datacenter(module):
-    datacenter_name = module.params['datacenter_name']
-    content = module.params['content']
-    changed = True
-    datacenter = None
-
-    folder = content.rootFolder
+def create_datacenter(context, module):
+    datacenter_name = module.params.get('datacenter_name')
+    folder = context.rootFolder
 
     try:
-        if not module.check_mode:
-            datacenter = folder.CreateDatacenter(name=datacenter_name)
-        module.exit_json(changed=changed, result=str(datacenter))
+        datacenter = get_datacenter(context, module)
+        changed = False
+        if not datacenter:
+            changed = True
+            if not module.check_mode:
+                folder.CreateDatacenter(name=datacenter_name)
+        module.exit_json(changed=changed)
     except vim.fault.DuplicateName:
         module.fail_json(msg="A datacenter with the name %s already exists" % datacenter_name)
     except vim.fault.InvalidName:
         module.fail_json(msg="%s is an invalid name for a cluster" % datacenter_name)
     except vmodl.fault.NotSupported:
+        # This should never happen
         module.fail_json(msg="Trying to create a datacenter on an incorrect folder object")
     except vmodl.RuntimeFault as runtime_fault:
         module.fail_json(msg=runtime_fault.msg)
@@ -177,15 +106,17 @@ def state_create_datacenter(module):
         module.fail_json(msg=method_fault.msg)
 
 
-def state_destroy_datacenter(module):
-    datacenter = module.params['datacenter']
-    changed = True
+def destroy_datacenter(context, module):
     result = None
 
     try:
-        if not module.check_mode:
-            task = datacenter.Destroy_Task()
-            changed, result = wait_for_task(task)
+        datacenter = get_datacenter(context, module)
+        changed = False
+        if datacenter:
+            changed = True
+            if not module.check_mode:
+                task = datacenter.Destroy_Task()
+                changed, result = wait_for_task(task)
         module.exit_json(changed=changed, result=result)
     except vim.fault.VimFault as vim_fault:
         module.fail_json(msg=vim_fault.msg)
@@ -195,42 +126,51 @@ def state_destroy_datacenter(module):
         module.fail_json(msg=method_fault.msg)
 
 
+def check_datacenter_state(context, module):
+
+    datacenter = get_datacenter(context, module)
+
+    if datacenter:
+        return 'present'
+    else:
+        return 'absent'
+
+
 def state_exit_unchanged(module):
-    module.exit_json(changed=False)
+    module.exit_json(changed=False, msg="EXIT UNCHANGED")
 
 
 def main():
-    argument_spec = dict(
-        host=dict(required=True, type='str'),
-        login=dict(required=True, type='str'),
-        password=dict(required=True, type='str'),
-        port=dict(required=True, type='int'),
-        datacenter_name=dict(required=True, type='str'),
-        state=dict(required=True, choices=['present', 'absent'], type='str'),
+    argument_spec = vmware_argument_spec()
+
+    argument_spec.update(
+        dict(
+            datacenter_name=dict(required=True, type='str'),
+            state=dict(required=True, choices=['present', 'absent'], type='str'),
+        )
     )
 
-    module = AnsibleModule(argument_spec=argument_spec, supports_check_mode=True)
+    module = AnsibleModule(argument_spec=argument_spec, supports_check_mode=False)
 
     if not HAS_PYVMOMI:
         module.fail_json(msg='pyvmomi is required for this module')
 
-    datacenter_states = {
-        'absent': {
-            'present': state_destroy_datacenter,
-            'absent': state_exit_unchanged,
-        },
-        'present': {
-            'present': state_exit_unchanged,
-            'absent': state_create_datacenter,
-        }
-    }
+    context = connect_to_api(module)
+
     desired_state = module.params['state']
-    current_state = check_datacenter_state(module)
+    current_state = check_datacenter_state(context, module)
 
-    datacenter_states[desired_state][current_state](module)
+    if (desired_state == current_state):
+        state_exit_unchanged(module)
 
+    if desired_state == 'present':
+        create_datacenter(context, module)
+
+    if desired_state == 'absent':
+        destroy_datacenter(context, module)
 
 from ansible.module_utils.basic import *
+from ansible.module_utils.vmware import *
 
 if __name__ == '__main__':
     main()

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 #
 # (c) 2015, Joseph Callen <jcallen () csc.com>
 # Portions Copyright (c) 2015 VMware, Inc. All rights reserved.
@@ -26,6 +26,11 @@ description:
     - Create VMware vSphere Cluster according to dict spec. Module will set
     default values if only enabled specified as true. Full CRUD operations
     on specified values.
+notes:
+    requirements:
+    - pyVmomi
+    - Tested on vcenter 6.0.0 Build 2594327
+    - ansible 2.1.0.0
 options:
     hostname:
         description:
@@ -83,12 +88,11 @@ options:
 
 EXAMPLES = '''
 - name: Create Clusters
-  ignore_errors: no
   vcenter_cluster:
-    host: "{{ vcenter_host }}"
-    login: "{{ vcenter_user }}"
+    hostname: "{{ vcenter_host }}"
+    username: "{{ vcenter_user }}"
     password: "{{ vcenter_password }}"
-    port: "{{ vcenter_port }}"
+    validate_certs: False
     datacenter_name: "{{ datacenter_name }}"
     cluster_name: "{{ item['name'] }}"
     ha:
@@ -112,15 +116,10 @@ EXAMPLES = '''
     - "{{ datacenter['clusters'] }}"
   tags:
     - datacenter
-
-
 '''
 
+
 try:
-    import atexit
-    import time
-    import requests
-    from pyVim import connect
     from pyVmomi import vim, vmodl
     HAS_PYVMOMI = True
 except ImportError:
@@ -138,71 +137,6 @@ ha_defaults = {
     'failoverLevel': 1,
     'vmMonitoring': 'vmMonitoringDisabled'
 }
-
-
-def connect_to_vcenter(module, disconnect_atexit=True):
-    hostname = module.params['host']
-    username = module.params['login']
-    password = module.params['password']
-    port = module.params['port']
-
-    try:
-        service_instance = connect.SmartConnect(
-            host=hostname,
-            user=username,
-            pwd=password,
-            port=port
-        )
-
-        if disconnect_atexit:
-            atexit.register(connect.Disconnect, service_instance)
-
-        return service_instance.RetrieveContent()
-    except vim.fault.InvalidLogin, invalid_login:
-        module.fail_json(msg=invalid_login.msg, apierror=str(invalid_login))
-    except requests.ConnectionError, connection_error:
-        module.fail_json(msg="Unable to connect to vCenter or ESXi API on TCP/443.", apierror=str(connection_error))
-
-
-def wait_for_task(task):
-    while True:
-        if task.info.state == vim.TaskInfo.State.success:
-            return True, task.info.result
-        if task.info.state == vim.TaskInfo.State.error:
-            try:
-                raise Exception(task.info.error)
-            except AttributeError:
-                raise TaskError("An unknown error has occurred")
-        if task.info.state == vim.TaskInfo.State.running:
-            time.sleep(15)
-        if task.info.state == vim.TaskInfo.State.queued:
-            time.sleep(15)
-
-
-def get_all_objects(content, vimtype):
-    obj = {}
-    container = content.viewManager.CreateContainerView(content.rootFolder, vimtype, True)
-    for managed_object_ref in container.view:
-        obj.update({managed_object_ref: managed_object_ref.name})
-    return obj
-
-
-def find_vcenter_object_by_name(content, vimtype, object_name):
-    vcenter_object = get_all_objects(content, [vimtype])
-
-    for k, v in vcenter_object.items():
-        if v == object_name:
-            return k
-    else:
-        return None
-
-
-def find_cluster_by_name_datacenter(datacenter, cluster_name):
-    host_folder = datacenter.hostFolder
-    for folder in host_folder.childEntity:
-        if folder.name == cluster_name:
-            return folder
-    return None
 
 
 def check_null_vals(module, spec_type):
@@ -281,7 +215,7 @@ def configure_ha(module, enable_ha):
 
     return das_config
 
-
+#need to add check for if drs is false
 def configure_drs(module, enable_drs):
     check_null_vals(module, 'drs')
 
@@ -312,10 +246,20 @@ def configure_vsan(module, enable_vsan):
     return vsan_config
 
 
-def check_spec_drs(module):
-    cluster = module.params['cluster']
+def check_spec_vsan(si, module):
+    pass
+
+
+def check_spec_drs(si, module):
+
+    datacenter_name = module.params['datacenter_name']
+    datacenter = find_datacenter_by_name(si, datacenter_name)
+
+    cluster_name = module.params['cluster_name']
+    cluster = find_cluster_by_name_datacenter(datacenter, cluster_name)
+
     drs_info = module.params['drs']
-    desired_drs_spec = configure_drs(module, True)
+    desired_drs_spec = configure_drs(module, module.params['drs']['enabled'])
     desired_drs_props = [prop for prop, val in desired_drs_spec._propInfo.items()]
 
     for i in desired_drs_props:
@@ -327,8 +271,14 @@ def check_spec_drs(module):
         return True
 
 
-def check_spec_ha(module):
-    cluster = module.params['cluster']
+def check_spec_ha(si, module):
+
+    datacenter_name = module.params['datacenter_name']
+    datacenter = find_datacenter_by_name(si, datacenter_name)
+
+    cluster_name = module.params['cluster_name']
+    cluster = find_cluster_by_name_datacenter(datacenter, cluster_name)
+
     ha_info = module.params['ha']
     desired_ha_spec = configure_ha(module, True)
     desired_ha_props = [prop for prop, val in desired_ha_spec._propInfo.items()]
@@ -343,44 +293,29 @@ def check_spec_ha(module):
         return True
 
 
-def check_config_drs(module):
-    cluster = module.params['cluster']
-    drs_check = check_spec_drs(module)
-    drs_enabled = cluster.configurationEx.drsConfig.enabled
+def state_create_cluster(si, module):
 
-    if drs_check and drs_enabled:
-        return True
-    else:
-        return False
-
-
-def check_config_ha(module):
-    cluster = module.params['cluster']
-    ha_check = check_spec_ha(module)
-    ha_enabled = cluster.configurationEx.dasConfig.enabled
-
-    if ha_check and ha_enabled:
-        return True
-    else:
-        return False
-
-
-def state_create_cluster(module):
     enable_ha = module.params['ha']['enabled']
     enable_drs = module.params['drs']['enabled']
     enable_vsan = module.params['vsan']['enabled']
     cluster_name = module.params['cluster_name']
-    datacenter = module.params['datacenter']
+
+    datacenter_name = module.params['datacenter_name']
+    datacenter = find_datacenter_by_name(si, datacenter_name)
 
     try:
         cluster_config_spec = vim.cluster.ConfigSpecEx()
         cluster_config_spec.dasConfig = configure_ha(module, enable_ha)
         cluster_config_spec.drsConfig = configure_drs(module, enable_drs)
+
         if enable_vsan:
             cluster_config_spec.vsanConfig = configure_vsan(module, enable_vsan)
+
         if not module.check_mode:
             datacenter.hostFolder.CreateClusterEx(cluster_name, cluster_config_spec)
+
         module.exit_json(changed=True)
+
     except vim.fault.DuplicateName:
         module.fail_json(msg="A cluster with the name %s already exists" % cluster_name)
     except vmodl.fault.InvalidArgument:
@@ -395,8 +330,14 @@ def state_create_cluster(module):
         module.fail_json(msg=method_fault.msg)
 
 
-def state_destroy_cluster(module):
-    cluster = module.params['cluster']
+def state_destroy_cluster(si, module):
+
+    datacenter_name = module.params['datacenter_name']
+    datacenter = find_datacenter_by_name(si, datacenter_name)
+
+    cluster_name = module.params['cluster_name']
+    cluster = find_cluster_by_name_datacenter(datacenter, cluster_name)
+
     changed = True
     result = None
 
@@ -413,16 +354,24 @@ def state_destroy_cluster(module):
         module.fail_json(msg=method_fault.msg)
 
 
-def state_exit_unchanged(module):
-    module.exit_json(changed=False)
+def state_exit_unchanged(si, module):
+    module.exit_json(changed=False, msg="EXIT UNCHANGED")
 
 
-def state_update_cluster(module):
+def state_update_cluster(si, module):
+
+    datacenter_name = module.params['datacenter_name']
+    datacenter = find_datacenter_by_name(si, datacenter_name)
+
+    cluster_name = module.params['cluster_name']
+    cluster = find_cluster_by_name_datacenter(datacenter, cluster_name)
+
     cluster_config_spec = vim.cluster.ConfigSpecEx()
-    cluster = module.params['cluster']
+
     enable_ha = module.params['ha']['enabled']
     enable_drs = module.params['drs']['enabled']
     enable_vsan = module.params['vsan']['enabled']
+
     changed = True
     result = None
 
@@ -446,79 +395,89 @@ def state_update_cluster(module):
         module.fail_json(msg=str(task_e))
 
 
-def check_cluster_configuration(module):
+def check_cluster_configuration(si, module):
+
     datacenter_name = module.params['datacenter_name']
     cluster_name = module.params['cluster_name']
 
+    state = 'absent'
+
     try:
-        content = connect_to_vcenter(module)
-        datacenter = find_vcenter_object_by_name(content, vim.Datacenter, datacenter_name)
-        if datacenter is None:
-            module.fail_json(msg="Datacenter %s does not exist" % datacenter_name)
+        datacenter = find_datacenter_by_name(si, datacenter_name)
+
+        if not datacenter:
+            module.fail_json(msg="Datacenter {} does not exist".format(datacenter_name))
+
         cluster = find_cluster_by_name_datacenter(datacenter, cluster_name)
 
-        module.params['content'] = content
-        module.params['datacenter'] = datacenter
+        if cluster:
 
-        if cluster is None:
-            return 'absent'
-        else:
-            module.params['cluster'] = cluster
-
-            desired_state = (module.params['ha']['enabled'],
-                             module.params['drs']['enabled'],
-                             module.params['vsan']['enabled'])
-
-            current_state = (check_config_ha(module),
-                             check_config_drs(module),
-                             cluster.configurationEx.vsanConfigInfo.enabled)
-
-            if cmp(desired_state, current_state) != 0:
-                return 'update'
+            if module.params['vsan']['enabled']:
+                enable_check = (cluster.configurationEx.vsanConfigInfo.enabled == module.params['vsan']['enabled'])
+                auto_claim_check = (
+                    cluster.configurationEx.vsanConfigInfo.defaultConfig.autoClaimStorage == module.params['vsan']['autoClaimStorage']
+                )
+                vsan_check = (enable_check and auto_claim_check)
             else:
-                return 'present'
-    except vmodl.RuntimeFault as runtime_fault:
-        module.fail_json(msg=runtime_fault.msg)
-    except vmodl.MethodFault as method_fault:
-        module.fail_json(msg=method_fault.msg)
+                vsan_check = True
+
+            check_list = [
+                check_spec_drs(si, module),
+                check_spec_ha(si, module),
+                vsan_check
+            ]
+
+            if False in check_list:
+                state = 'update'
+            else:
+                state = 'present'
+
+    except Exception as e:
+        module.fail_json(msg="Failed checking state")
+
+    return state
 
 
 def main():
-    argument_spec = dict(
-        host=dict(required=True, type='str'),
-        login=dict(required=True, type='str'),
-        password=dict(required=True, type='str'),
-        port=dict(required=True, type='int'),
-        datacenter_name=dict(required=True, type='str'),
-        cluster_name=dict(required=True, type='str'),
-        ha=dict(type='dict'),
-        drs=dict(type='dict'),
-        vsan=dict(type='dict'),
-        state=dict(default='present', choices=['present', 'absent'], type='str'),
+    argument_spec = vmware_argument_spec()
+
+    argument_spec.update(
+        dict(
+            datacenter_name=dict(required=True, type='str'),
+            cluster_name=dict(required=True, type='str'),
+            ha=dict(type='dict'),
+            drs=dict(type='dict'),
+            vsan=dict(type='dict'),
+            state=dict(default='present', choices=['present', 'absent'], type='str'),
+        )
     )
 
-    module = AnsibleModule(argument_spec=argument_spec, supports_check_mode=True)
+    module = AnsibleModule(argument_spec=argument_spec, supports_check_mode=False)
 
     if not HAS_PYVMOMI:
         module.fail_json(msg='pyvmomi is required for this module')
 
-    cluster_states = {
+    states = {
         'absent': {
-            'present': state_destroy_cluster,
             'absent': state_exit_unchanged,
+            'present': state_destroy_cluster,
         },
         'present': {
-            'update': state_update_cluster,
             'present': state_exit_unchanged,
             'absent': state_create_cluster,
+            'update': state_update_cluster
         }
     }
-    desired_state = module.params['state']
-    current_state = check_cluster_configuration(module)
-    cluster_states[desired_state][current_state](module)
 
+    context = connect_to_api(module)
+
+    desired_state = module.params['state']
+    current_state = check_cluster_configuration(context, module)
+
+    states[desired_state][current_state](context, module)
 
 from ansible.module_utils.basic import *
+from ansible.module_utils.vmware import *
 
 if __name__ == '__main__':
     main()

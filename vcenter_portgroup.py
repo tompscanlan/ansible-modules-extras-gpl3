@@ -26,21 +26,16 @@ short_description: Manage VMware vSphere VDS Portgroup
 description:
 	- Manage VMware vCenter portgroups in a given virtual distributed switch
 version_added: 1.0
-author: '"Daniel Kim" <kdaniel () vmware.com>'
 notes:
-	- Tested on vSphere 5.5
+	- Tested on vSphere 6.0
 requirements:
 	- "python >= 2.6"
 	- PyVmomi
-options (all of them are str type):
+options:
 	hostname:
 		description:
 			- The hostname or IP address of the vSphere vCenter API server
 		required: True
-	vs_port:
-		description:
-			- The port to be used to connect to the vsphere host
-		required: False
 	username:
 		description:
 			- The username of the vSphere vCenter
@@ -82,52 +77,41 @@ options (all of them are str type):
 		required: True
 '''
 EXAMPLES = '''
-# Example vmware_datacenter command from Ansible Playbooks
-- name: Create Port Group
-	local_action: >
-		vPortgroup
-		hostname="{{ vSphere_host }}" username=root password=vmware
-		vsphere_port="443"
-		port_group_name="test_port_grp1"
-		num_ports="8"
+- name: create portgroups
+  vcenter_portgroup:
+    hostname: '172.16.78.15'
+    username: 'administrator@vsphere.local'
+    password: 'VMware1!'
+    validate_certs: False
+    vds_name: 'vds001'
+    port_group_name: "{{ item['name'] }}"
+    port_binding: "{{ item['binding'] }}"
+    port_allocation: "{{ item['allocation'] }}"
+    numPorts: "{{ item['numports'] }}"
+    vlan:
+    state: 'present'
+  with_items:
+    - { name: 'pg001', binding: 'static', allocation: 'elastic', numports: 8 }
 '''
+
+
 try:
     from pyVmomi import vim, vmodl
-    from pyVim import connect
-
     HAS_PYVMOMI = True
 except ImportError:
     HAS_PYVMOMI = False
 
-import ssl
 
-if hasattr(ssl, '_create_default_https_context') and hasattr(ssl, '_create_unverified_context'):
-    ssl._create_default_https_context = ssl._create_unverified_context
+pgTypeMap = {
+    'static': 'earlyBinding',
+    'dynamic': 'lateBinding',
+    'ephemeral': 'ephemeral',
+}
 
-import time
-
-
-def wait_for_task(task):
-    while True:
-        if task.info.state == vim.TaskInfo.State.success:
-            return True, task.info.result
-        if task.info.state == vim.TaskInfo.State.error:
-            try:
-                raise TaskError(task.info.error)
-            except AttributeError:
-                raise TaskError("An unknown error has occurred")
-        if task.info.state == vim.TaskInfo.State.running:
-            time.sleep(10)
-        if task.info.state == vim.TaskInfo.State.queued:
-            time.sleep(10)
-
-
-def get_all_objs(content, vimtype):
-    obj = {}
-    container = content.viewManager.CreateContainerView(content.rootFolder, vimtype, True)
-    for managed_object_ref in container.view:
-        obj.update({managed_object_ref: managed_object_ref.name})
-    return obj
+pg_allocation = {
+    'elastic': True,
+    'fixed': False,
+}
 
 
 def find_vds_by_name(content, vds_name):
@@ -140,35 +124,15 @@ def find_vds_by_name(content, vds_name):
 
 def find_vdspg_by_name(vdSwitch, portgroup_name):
     portgroups = vdSwitch.portgroup
+
     for pg in portgroups:
         if pg.name == portgroup_name:
             return pg
     return None
 
 
-def check_port_group_state(module):
-    vds_name = module.params['vds_name']
-    port_group_name = module.params['port_group_name']
-    try:
-        content = module.params['content']
-        vds = find_vds_by_name(content, vds_name)
-        if vds is None:
-            module.fail_json(msg='Target distributed virtual switch does not exist!')
-        port_group = find_vdspg_by_name(vds, port_group_name)
-        module.params['vds'] = vds
-        if port_group is None:
-            return 'absent'
-        else:
-            module.params['port_group'] = port_group
-            return 'present'
-    except vmodl.RuntimeFault as runtime_fault:
-        module.fail_json(msg=runtime_fault.msg)
-    except vmodl.MethodFault as method_fault:
-        module.fail_json(msg=method_fault.msg)
-
-
-def state_exit_unchanged(module):
-    module.exit_json(changed=False)
+def state_exit_unchanged(si, module):
+    module.exit_json(changed=False, msg="EXIT UNCHANGED")
 
 
 def state_destroy_port_group(module):
@@ -176,54 +140,135 @@ def state_destroy_port_group(module):
     module.exit_json(changed=False)
 
 
-def state_create_port_group(module):
+def check_pg_spec(si, module):
+
+    state = True
+
+    vds_name = module.params['vds_name']
+    vds = find_vds_by_name(si, vds_name)
+
+    pg_name = module.params['port_group_name']
+    pg = find_vdspg_by_name(vds, pg_name)
+
+    check_vals = [
+        (pgTypeMap[module.params['port_binding']] == pg.config.type),
+        (pg_allocation[module.params['port_allocation']] == pg.config.autoExpand),
+        (module.params['numPorts'] == pg.config.numPorts),
+    ]
+
+    if False in check_vals:
+        state = False
+
+    return state
+
+
+def create_pg_spec(si, update, module):
+
     port_group_name = module.params['port_group_name']
-    content = module.params['content']
-    vds = module.params['vds']
+
+    port_group_spec = vim.dvs.DistributedVirtualPortgroup.ConfigSpec()
+    port_group_spec.name = port_group_name
+    port_group_spec.numPorts = module.params['numPorts']
+    port_group_spec.type = pgTypeMap[module.params['port_binding']]
+    port_group_spec.autoExpand = pg_allocation[module.params['port_allocation']]
+
+    pg_policy = vim.dvs.DistributedVirtualPortgroup.PortgroupPolicy()
+    port_group_spec.policy = pg_policy
+
+    if module.params['vlan']:
+        port_group_spec.defaultPortConfig = vim.dvs.VmwareDistributedVirtualSwitch.VmwarePortConfigPolicy()
+        port_group_spec.defaultPortConfig.vlan = vim.dvs.VmwareDistributedVirtualSwitch.VlanIdSpec()
+        port_group_spec.defaultPortConfig.vlan.vlanId = module.params['vlan']
+        #port_group_spec.defaultPortConfig.vlan.inherited = False
+
+    if update:
+        vds_name = module.params['vds_name']
+        vds = find_vds_by_name(si, vds_name)
+
+        pg_name = module.params['port_group_name']
+        pg = find_vdspg_by_name(vds, pg_name)
+
+        port_group_spec.configVersion = pg.config.configVersion
+
+    return port_group_spec
+
+
+def state_create_port_group(si, module):
+
+    port_group_spec = create_pg_spec(si, False, module)
+
+    vds_name = module.params['vds_name']
+    vds = find_vds_by_name(si, vds_name)
+
     try:
         if not module.check_mode:
-            port_group_spec = vim.dvs.DistributedVirtualPortgroup.ConfigSpec()
-            port_group_spec.name = port_group_name
-            port_group_spec.numPorts = int(module.params['numPorts'])
 
-            pgTypeMap = {
-                'static': 'earlyBinding',
-                'dynamic': 'lateBinding',
-                'ephemeral': "ephemeral"
-            }
-
-            port_group_spec.type = pgTypeMap[module.params['port_binding']]
-
-            if module.params['vlan']:
-                port_group_spec.defaultPortConfig = vim.dvs.VmwareDistributedVirtualSwitch.VmwarePortConfigPolicy()
-                port_group_spec.defaultPortConfig.vlan = vim.dvs.VmwareDistributedVirtualSwitch.VlanIdSpec()
-                port_group_spec.defaultPortConfig.vlan.vlanId = int(module.params['vlan'])
-                port_group_spec.defaultPortConfig.vlan.inherited = False
-
-            pg_policy = vim.dvs.DistributedVirtualPortgroup.PortgroupPolicy()
-            port_group_spec.policy = pg_policy
             task = vds.AddDVPortgroup_Task(spec=[port_group_spec])
-            status = task.info.state
-            wait_for_task(task)
-            module.exit_json(changed=True)
+
+            changed, result = wait_for_task(task)
+            module.exit_json(changed=changed, result=result)
+
     except Exception, e:
         module.fail_json(msg=str(e))
 
 
+def state_update_port_group(si, module):
+
+    vds_name = module.params['vds_name']
+    vds = find_vds_by_name(si, vds_name)
+
+    pg_name = module.params['port_group_name']
+    pg = find_vdspg_by_name(vds, pg_name)
+
+    pg_spec = create_pg_spec(si, True, module)
+
+    try:
+        reconfig_task = pg.ReconfigureDVPortgroup_Task(pg_spec)
+        changed, result = wait_for_task(reconfig_task)
+    except Exception as e:
+        module.fail_json(msg="Failed to reconfigure pg: {}".format(e))
+
+    module.exit_json(changed=changed, result=result)
+
+
+def check_port_group_state(si, module):
+
+    vds_name = module.params['vds_name']
+    port_group_name = module.params['port_group_name']
+    vlan = module.params['vlan']
+
+    if vlan:
+        module.params['vlan'] = int(vlan)
+    else:
+        module.params['vlan'] = None
+
+    vds = find_vds_by_name(si, vds_name)
+
+    port_group = find_vdspg_by_name(vds, port_group_name)
+
+    if port_group is None:
+        return 'absent'
+    elif not check_pg_spec(si, module):
+        return 'update'
+    else:
+        return 'present'
+
+
 def main():
-    argument_spec = dict(
-        hostname=dict(type='str', required=True),
-        vs_port=dict(type='str'),
-        username=dict(type='str', aliases=['user', 'admin'], required=True),
-        password=dict(type='str', aliases=['pass', 'pwd'], required=True, no_log=True),
-        vds_name=dict(type='str', required=True),
-        port_group_name=dict(required=True, type='str'),
-        port_binding=dict(required=True, choices=['static', 'dynamic', 'ephemeral'], type='str'),
-        port_allocation=dict(choices=['fixed', 'elastic'], type='str'),
-        numPorts=dict(required=True, type='str'),
-        state=dict(required=True, choices=['present', 'absent'], type='str'),
-        vlan=dict(type='str', required=False, default=False),
+    argument_spec = vmware_argument_spec()
+
+    argument_spec.update(
+        dict(
+            vds_name=dict(type='str', required=True),
+            port_group_name=dict(required=True, type='str'),
+            port_binding=dict(required=True, choices=['static', 'dynamic', 'ephemeral'], type='str'),
+            port_allocation=dict(choices=['fixed', 'elastic'], type='str'),
+            numPorts=dict(required=True, type='int'),
+            vlan=dict(type='str', required=False, default=False),
+            state=dict(required=True, choices=['present', 'absent'], type='str'),
+        )
     )
+
     module = AnsibleModule(argument_spec=argument_spec, supports_check_mode=True)
 
     if not HAS_PYVMOMI:
@@ -236,31 +281,27 @@ def main():
         },
         'present': {
             'present': state_exit_unchanged,
+            'update': state_update_port_group,
             'absent': state_create_port_group,
         }
     }
 
+    si = connect_to_api(module)
+
+    vds_name = module.params['vds_name']
+    vds = find_vds_by_name(si, vds_name)
+
+    if not vds:
+        module.fail_json(msg="Could not find vds: {}".format(vds_name))
+
     desired_state = module.params['state']
+    current_state = check_port_group_state(si, module)
 
-    si = connect.SmartConnect(host=module.params['hostname'],
-                              user=module.params['username'],
-                              pwd=module.params['password'],
-                              port=int(module.params['vs_port']))
-    if not si:
-        module.fail_json(msg="Could not connect to the specified host using specified "
-                             "username and password")
-
-    content = si.RetrieveContent()
-    module.params['content'] = content
-
-    current_state = check_port_group_state(module)
-    port_group_states[desired_state][current_state](module)
-
-    connect.Disconnect(si)
+    port_group_states[desired_state][current_state](si, module)
 
 
 from ansible.module_utils.basic import *
-# from ansible.module_utils.vmware import *
+from ansible.module_utils.vmware import *
 
 if __name__ == '__main__':
     main()
