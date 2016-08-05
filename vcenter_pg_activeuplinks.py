@@ -20,9 +20,9 @@
 
 DOCUMENTATION = '''
 module: vcenter_pg_activeuplinks
-short_description: change the active uplinks on a vds portgroup
+short_description: set uplink to active or standby for portgroup
 description:
-    - change the active uplinks on a portgroup.
+    set uplink to active or standby for portgroup
 options:
     vds_name:
         description:
@@ -32,6 +32,9 @@ options:
         description:
             - Name of the portgroup to modify
         type: str
+    uplink_state:
+        description:
+            - Set to active or standby
     uplinks:
         description:
             - list of desired active uplinks.
@@ -85,18 +88,35 @@ def state_update_pguplinks(module):
     module.exit_json(msg="UPDATE")
 
 
-def uplink_spec(acive_uplinks, pg_config_version):
+def get_current_active_uplinks():
 
-    spec = vim.dvs.DistributedVirtualPortgroup.ConfigSpec(
-        configVersion = pg_config_version,
-        defaultPortConfig = vim.dvs.VmwareDistributedVirtualSwitch.VmwarePortConfigPolicy(
-            uplinkTeamingPolicy = vim.dvs.VmwareDistributedVirtualSwitch.UplinkPortTeamingPolicy(
-                uplinkPortOrder = vim.dvs.VmwareDistributedVirtualSwitch.UplinkPortOrderPolicy(
-                    activeUplinkPort = acive_uplinks
-                )
-            )
-        )
-    )
+    pg = vc['pg']
+
+    active_uplinks = \
+        pg.config.defaultPortConfig.uplinkTeamingPolicy.uplinkPortOrder.activeUplinkPort
+
+    return active_uplinks
+
+def uplink_spec(module, uplinks, pg_config_version):
+
+    spec = vim.dvs.DistributedVirtualPortgroup.ConfigSpec()
+    spec.configVersion = pg_config_version
+    spec.defaultPortConfig =vim.dvs.VmwareDistributedVirtualSwitch.VmwarePortConfigPolicy()
+    spec.defaultPortConfig.uplinkTeamingPolicy = vim.dvs.VmwareDistributedVirtualSwitch.UplinkPortTeamingPolicy()
+
+    if module.params['uplink_state'] == 'active':
+        spec.defaultPortConfig.uplinkTeamingPolicy.uplinkPortOrder = \
+            vim.dvs.VmwareDistributedVirtualSwitch.UplinkPortOrderPolicy()
+        spec.defaultPortConfig.uplinkTeamingPolicy.uplinkPortOrder.activeUplinkPort = uplinks
+
+    if module.params['uplink_state'] == 'standby':
+
+        active_uplinks = get_current_active_uplinks()
+
+        spec.defaultPortConfig.uplinkTeamingPolicy.uplinkPortOrder = \
+            vim.dvs.VmwareDistributedVirtualSwitch.UplinkPortOrderPolicy()
+        spec.defaultPortConfig.uplinkTeamingPolicy.uplinkPortOrder.activeUplinkPort = active_uplinks
+        spec.defaultPortConfig.uplinkTeamingPolicy.uplinkPortOrder.standbyUplinkPort = uplinks
 
     return spec
 
@@ -106,10 +126,9 @@ def create_active_uplink(module, pg):
     changed = False
     result = None
 
-    pg_spec = uplink_spec(
-        module.params['uplinks'],
-        vc['pg_config_version']
-    )
+    pg_spec = uplink_spec(module,
+                          module.params['uplinks'],
+                          vc['pg_config_version'])
 
     try:
         reconfig_task = pg.ReconfigureDVPortgroup_Task(pg_spec)
@@ -133,7 +152,7 @@ def state_create_pguplinks(module):
     changed, result = create_active_uplink(module, pg)
 
     if not changed:
-        module.fail_json(msg="Failed to reconfigure")
+        module.fail_json(msg="Failed to reconfigure active or standby uplinks")
 
     module.exit_json(changed=changed, result=result, msg="STATE CREATE")
 
@@ -192,10 +211,14 @@ def check_uplinks_present(module):
     state = False
 
     pg = vc['pg']
-    pg_active_uplinks = \
-        pg.config.defaultPortConfig.uplinkTeamingPolicy.uplinkPortOrder.activeUplinkPort
 
-    if (pg_active_uplinks == module.params['uplinks']):
+    if module.params['uplink_state'] == 'active':
+        pg_uplinks = pg.config.defaultPortConfig.uplinkTeamingPolicy.uplinkPortOrder.activeUplinkPort
+
+    if module.params['uplink_state'] == 'standby':
+        pg_uplinks = pg.config.defaultPortConfig.uplinkTeamingPolicy.uplinkPortOrder.standbyUplinkPort
+
+    if (pg_uplinks == module.params['uplinks']):
         state = True
 
     return state
@@ -245,6 +268,7 @@ def main():
         dict(
             vds_name=dict(required=True, type='str'),
             pg_name=dict(required=True, type='str'),
+            uplink_state=dict(required=True, choices=['active', 'standby'], type='str'),
             uplinks=dict(required=True, type='list'),
             state=dict(required=True, choices=['present', 'absent'], type='str'),
         )

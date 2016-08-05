@@ -109,7 +109,7 @@ EXAMPLE = '''
   with_items:
     - "{{ vcenter_host_pgs }}"
   tags:
-    - testing
+    - addvmk
 '''
 
 
@@ -262,26 +262,18 @@ def vmk_spec(module):
         ipaddress = module.params['ip_address']
         subnetMask = module.params['subnet_mask']
 
-        ip_spec = vim.host.IpConfig(
-            dhcp=False,
-            ipAddress=ipaddress,
-            subnetMask=subnetMask,
-        )
+        ip_spec = vim.host.IpConfig(dhcp=False,
+                                    ipAddress=ipaddress,
+                                    subnetMask=subnetMask)
     else:
-        ip_spec = vim.host.IpConfig(
-            dhcp=True,
-        )
+        ip_spec = vim.host.IpConfig(dhcp=True)
 
-    distrib_vport_spec = vim.dvs.PortConnection(
-        switchUuid=vdsuuid,
-        portgroupKey=portgroupKey
-    )
+    distrib_vport_spec = vim.dvs.PortConnection(switchUuid=vdsuuid,
+                                                portgroupKey=portgroupKey)
 
-    nic_spec = vim.host.VirtualNic.Specification(
-        ip=ip_spec,
-        distributedVirtualPort=distrib_vport_spec,
-        mtu=mtu,
-    )
+    nic_spec = vim.host.VirtualNic.Specification(ip=ip_spec,
+                                                 distributedVirtualPort=distrib_vport_spec,
+                                                 mtu=mtu)
 
     return nic_spec
 
@@ -333,17 +325,9 @@ def set_vmk_service_type(module, vmk):
 
 def vsan_spec(vmk):
 
-    vsan_port = vim.vsan.host.ConfigInfo.NetworkInfo.PortConfig(
-        device=vmk
-    )
-
-    net_info = vim.vsan.host.ConfigInfo.NetworkInfo(
-        port=[vsan_port]
-    )
-
-    vsan_config = vim.vsan.host.ConfigInfo(
-        networkInfo=net_info,
-    )
+    vsan_port = vim.vsan.host.ConfigInfo.NetworkInfo.PortConfig(device=vmk)
+    net_info = vim.vsan.host.ConfigInfo.NetworkInfo(port=[vsan_port])
+    vsan_config = vim.vsan.host.ConfigInfo(networkInfo=net_info)
 
     return vsan_config
 
