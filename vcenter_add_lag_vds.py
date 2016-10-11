@@ -48,7 +48,7 @@ options:
         type: str
     state:
         description:
-            - If the datacenter should be present or absent
+            - If should be present or absent
         choices: ['present', 'absent']
         required: True
 '''

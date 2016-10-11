@@ -414,10 +414,7 @@ def check_cluster_configuration(si, module):
 
             if module.params['vsan']['enabled']:
                 enable_check = (cluster.configurationEx.vsanConfigInfo.enabled == module.params['vsan']['enabled'])
-                auto_claim_check = (
-                    cluster.configurationEx.vsanConfigInfo.defaultConfig.autoClaimStorage == module.params['vsan']['autoClaimStorage']
-                )
-                vsan_check = (enable_check and auto_claim_check)
+                vsan_check = enable_check
             else:
                 vsan_check = True
 

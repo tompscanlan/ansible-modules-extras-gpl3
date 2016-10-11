@@ -146,7 +146,12 @@ except ImportError:
 
 
 def state_exit_unchanged(module):
-    module.exit_json(changed=False, msg='EXIT UNCHANGED')
+
+    neutron = get_neutron_client(module)
+
+    net_id = get_network_id(module, neutron)
+
+    module.exit_json(changed=False, net_id=net_id, msg='EXIT UNCHANGED')
 
 
 def state_delete_network(module):
@@ -191,7 +196,7 @@ def state_create_network(module):
     subnet = create_subnet(module, neutron, network_id)
 
     if subnet:
-        module.exit_json(changed=True, result=network_id, msg="CREATE NETWORK")
+        module.exit_json(changed=True, net_id=network_id, msg="CREATE NETWORK")
     else:
         module.exit_json(changed=False, msg="Failed creating network")
 
