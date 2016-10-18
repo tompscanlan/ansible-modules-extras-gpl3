@@ -26,8 +26,10 @@ description:
     - This module is for getting the vdnscope (transport zone) id. Intended to be used as part of
       the deploy and configure chaperone VIO role. This module will get the vdnscope id and
       output as an ansible variable to be used in later tasks
-author: Jake Dupuy jdupuy@vmware.com
-credits: VMware VIO Team
+requirements:
+    - requests
+    - ElementTree 
+    - json
 options:
     nsx_manager:
         description:
@@ -60,7 +62,6 @@ options:
         required: True
         type: str
 
-requirements: requests, ElementTree, json
 '''
 
 EXAMPLE = '''
