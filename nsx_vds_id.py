@@ -26,10 +26,7 @@ description:
     - This module is for getting the vdnscope (transport zone) id. Intended to be used as part of
       the deploy and configure chaperone VIO role. This module will get the vdnscope id and
       output as an ansible variable to be used in later tasks
-requirements:
-    - requests
-    - ElementTree 
-    - json
+credits: VMware VIO Team
 options:
     nsx_manager:
         description:
@@ -62,6 +59,7 @@ options:
         required: True
         type: str
 
+requirements: requests, ElementTree, json
 '''
 
 EXAMPLE = '''
@@ -141,7 +139,7 @@ def main():
         nsx_manager_username=dict(type='str', required=True),
         nsx_manager_password=dict(type='str', required=True),
         nsx_api_version=dict(type='str', default="2.0"),
-        vdnscop_name=dict(type='str', required=True),
+        vdnscope_name=dict(type='str', required=True),
         ansible_variable_name=dict(type='str'),
     )
 
@@ -166,23 +164,10 @@ def main():
     if resp.status_code != 200:
         module.fail_json(msg="Failed with response code--> {}".format(resp.status_code))
 
-    vds_id = n.vds_scope_id(resp.content, module.params['vds_name'])
+    vds_id = n.vds_scope_id(resp.content, module.params['vdnscope_name'])
 
     if vds_id:
-
-        ansible_facts_dict = {
-            "changed": False,
-            "ansible_facts": {
-
-            }
-        }
-
-        ansible_facts_dict['ansible_facts'].update(
-            {module.params['ansible_variable_name']: vds_id}
-        )
-
-        print json.dumps(ansible_facts_dict)
-
+        module.exit_json(changed=False, object_id=vds_id)
     else:
         module.exit_json(msg="Failed to get vdscope id")
 
