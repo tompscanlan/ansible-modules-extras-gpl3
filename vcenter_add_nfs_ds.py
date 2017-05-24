@@ -19,12 +19,29 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
 DOCUMENTATION = '''
-module: vcenter_nfs_ds
+module: vcenter_add_nfs_ds
 short_description: Add host to nfs datastore
 description:
     - Add host to specified nfs datastore
 options:
-
+    host:
+        description:
+            - The hostname or IP address of the vSphere vCenter API server
+        required: True
+    login:
+        description:
+            - The username of the vSphere vCenter
+        required: True
+        aliases: ['user', 'admin']
+    password:
+        description:
+            - The password of the vSphere vCenter
+        required: True
+        aliases: ['pass', 'pwd']
+    port:
+        description:
+            - The TCP port of the vSphere API
+        required: True
     esxi_hostname:
         description:
             - The esxi hostname or ip to add to nfs ds
@@ -66,10 +83,14 @@ options:
         required: True
 '''
 
-EXAMPLES = '''
+EXAMPLE = '''
 - name: Add NFS DS to Host
   ignore_errors: no
   vcenter_add_nfs_ds:
+    host: "{{ vcenter_host }}"
+    login: "{{ vcenter_user }}"
+    password: "{{ vcenter_password }}"
+    port: "{{ vcenter_port }}"
     esxi_hostname: '192.168.1.102'
     nfs_host: '192.168.1.145'
     nfs_path: '/nfs1'
@@ -231,7 +252,7 @@ def main():
             nfs_access=dict(required=True, type='str'),
             nfs_type=dict(required=False, type='str'),
             nfs_username=dict(required=False, type='str'),
-            nfs_password=dict(required=False, type='str', no_log=True),
+            nfs_password=dict(required=False, type='str'),
             state=dict(default='present', choices=['present', 'absent'], type='str'),
         )
     )
