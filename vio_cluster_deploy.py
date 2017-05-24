@@ -20,19 +20,20 @@
 
 
 DOCUMENTATION = '''
-module: vio_cluster_deploy
-short_description: Deploy/Delete vio cluster
+module: vio_deploy
+short_description: Deploy vio cluster for chaperone vio
 description:
-    Deploy/Delete vio cluster
-requirements:
-    json
-    os
-    logging
-    requests
-    inspect
-    collections
-    ansible 2.x
+    deploy/deletes vio cluster
+Tested:
+    - vsphere 6.0.0 Build 3632585
+    - ansible 2.x
+    - VIO 3.0
 credits: Much thanks to VMware VIO Team for creating the omsclient
+requirements:
+    - json
+    - logging
+    - requests
+    - inspect
 options:
     oms_server:
         description:
@@ -54,23 +55,10 @@ options:
             - path to the vio cluster specification json file.
         required: True
         type: str
-    vio_mgmt_datastores:
-        description:
-            - list of vcenter datastore names for vio management node datastore placment
-        required: True
-        type: list
-    vio_deployment_name:
-        description:
-            - Name for the vio cluster
-        required: True
-        type: str
     state:
         description:
             - desired state of the vio cluster
-        choices: present, absent
-
-
-requirements:
+        choices: present, absent 
 '''
 
 EXAMPLE = '''
@@ -80,9 +68,8 @@ EXAMPLE = '''
     login: "{{ vio_oms_vcenter_username }}"
     password: "{{ vio_oms_vcenter_pwd }}"
     cluster_spec_json: "{{ vio_cluster_spec }}"
-    vio_mgmt_datastores: "{{ vio_mgmt_node_datastores }}"
     vio_deployment_name: "{{ vio_cluster_name }}"
-    state: "{{ desired_state }}"
+    state: 'present'
   tags:
     - vio_cluster
 '''
@@ -93,13 +80,12 @@ try:
     import logging
     import requests
     import inspect
-    import collections
     IMPORTS = True
 except ImportError:
     IMPORTS = False
 
 LOG = logging.getLogger(__name__)
-handler = logging.FileHandler('/var/log/chaperone/vio_cluster_deploy.log')
+handler = logging.FileHandler('/tmp/vio_cluster_log.log')
 formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 handler.setFormatter(formatter)
 LOG.addHandler(handler)
@@ -493,26 +479,15 @@ def log(message=None):
     LOG.debug(msg)
 
 
-class VioOms(object):
-    """VioOms Using the OmsController module to Create and delete vio cluster deployments
-    :param module: AnsibleModule
-    :param server: oms server
-    :param password: oms password
-    :param cluster_name: name of th vio deployment
-    :param cluster_spec_file: vio cluster speicifiation file
-    :param ds_list: list of dns servers
-    :param desired_state: absent or present
-    :param oms: connection to the OMS API
-    """
+class OmsDeploy(object):
+    """OmsDeploy"""
     def __init__(self, module):
-        super(VioOms, self).__init__()
         self.module = module
         self.server = module.params['oms_server']
         self.user = module.params['login']
         self.password = module.params['password']
         self.cluster_name = module.params['vio_deployment_name']
         self.cluster_spec_file = module.params['cluster_spec_json']
-        self.ds_list = module.params['vio_mgmt_datastores']
         self.desired_state = module.params['state']
         self.oms = OmsController(self.server, self.user, self.password)
 
@@ -572,9 +547,7 @@ class VioOms(object):
 
     def deployments(self):
         log()
-
         deployments = self.oms.list_deployments()
-
         if deployments.status_code != 200:
             msg="Failed to get deployments"
             log(msg)
@@ -629,35 +602,14 @@ class VioOms(object):
             msg="Failed to create plan: {}".format(plan.status_code)
             log(msg)
             self.module.fail_json(msg=msg)
-        json_data['attributes']['plan'] = plan.content
+        json_data['attributes']['attributes'] = plan.content
         log(json_data)
         return json_data
 
-    def update_attr_plan(self):
-        log()
-        plan = self.create_plan()
-        attr_plan = plan['attributes']['plan']
-        attr_plan_json = json.loads(attr_plan)
-        plan_nodes = [at for at in attr_plan_json]
-
-        ds_que = collections.deque(self.ds_list)
-
-        for i in plan_nodes:
-            for k,v in i.items():
-                if k == 'targetSystemDs':
-                    i[k] = ds_que[0]
-                    ds_que.rotate(1)
-
-        attr_plan_str = json.dumps(attr_plan_json)
-        plan['attributes']['plan'] = attr_plan_str
-        return plan
-
     def state_create_deployment(self):
         log()
-        converted_plan = self.update_attr_plan()
-        log(converted_plan)
-
-        create = self.oms.create_deployment_by_spec(converted_plan)
+        plan = self.create_plan()
+        create = self.oms.create_deployment_by_spec(plan)
         log(create.status_code)
 
         if create.status_code != 202:
@@ -666,7 +618,6 @@ class VioOms(object):
             self.module.fail_json(msg=msg)
 
         self.module.exit_json(changed=True, result=create.status_code)
-
 
     def check_deployment_state(self):
         log()
@@ -705,13 +656,12 @@ class VioOms(object):
             log(msg)
             self.module.fail_json(msg=msg)
         log(delete_deploy.status_code)
-
         self.module.exit_json(changed=True, result=delete_deploy.status_code)
 
     def state_update_deployment(self):
-        self.module.exit_json(changed=False, msg="update currently not supported")
+        self.module.exit_json(msg="update")
 
-    def run_state(self):
+    def process_state(self):
         states = {
             'absent': {
                 'update': self.delete_deployment,
@@ -735,7 +685,6 @@ def main():
         login=dict(required=True, type='str'),
         password=dict(required=True, type='str', no_log=True),
         cluster_spec_json=dict(required=True, type='str'),
-        vio_mgmt_datastores=dict(required=True, type='list'),
         vio_deployment_name=dict(required=True, type='str'),
         state=dict(default='present', choices=['present', 'absent'], type='str'),
     )
@@ -745,8 +694,9 @@ def main():
     if not IMPORTS:
         module.fail_json(msg='python modules failed to import required for this module')
 
-    oms_deploy = VioOms(module)
-    oms_deploy.run_state()
+    oms_deploy = OmsDeploy(module)
+    oms_deploy.process_state()
+
 
 from ansible.module_utils.basic import *
 
