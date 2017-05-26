@@ -170,7 +170,7 @@ def create_pg_spec(si, update, module):
     port_group_spec.name = port_group_name
     port_group_spec.numPorts = module.params['numPorts']
     port_group_spec.type = pgTypeMap[module.params['port_binding']]
-    port_group_spec.autoExpand = pg_allocation[module.params['port_allocation']]
+    #port_group_spec.autoExpand = pg_allocation[module.params['port_allocation']]
 
     pg_policy = vim.dvs.DistributedVirtualPortgroup.PortgroupPolicy()
     port_group_spec.policy = pg_policy
