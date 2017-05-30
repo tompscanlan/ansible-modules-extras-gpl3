@@ -28,6 +28,7 @@ description:
 requirements:
     - pyvmomi 6
     - ansible 2.x
+    - ovftool
 Tested on:
     - vcenter 6.0
     - pyvmomi 6
@@ -130,7 +131,7 @@ options:
         required: True
 '''
 
-EXAMPLE = '''
+EXAMPLES = '''
 - name: deploy vRO Appliance
   vcenter_vro_deploy:
     hostname: "{{ vcenter }}"
@@ -159,6 +160,12 @@ EXAMPLE = '''
     - deploy_vro_ova
 '''
 
+RETURN = '''
+description: TBD
+returned: 
+type: 
+sample: 
+'''
 
 try:
     import time

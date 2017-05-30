@@ -1,4 +1,5 @@
-#!/usr/bin/env python
+#!/usr/bin/python
+# coding=utf-8
 #
 # (c) 2015, Joseph Callen <jcallen () csc.com>
 # Portions Copyright (c) 2015 VMware, Inc. All rights reserved.
@@ -18,15 +19,23 @@
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
+ANSIBLE_METADATA = {'metadata_version': '1.0',
+                    'status': ['preview'],
+                    'supported_by': 'community'}
 
 DOCUMENTATION = '''
 module: nsx_vds_id
 short_description: Get the specified nsx vdnscope ID
 description:
-    - This module is for getting the vdnscope (transport zone) id. Intended to be used as part of
-      the deploy and configure chaperone VIO role. This module will get the vdnscope id and
-      output as an ansible variable to be used in later tasks
-credits: VMware VIO Team
+    This module is for getting the vdnscope (transport zone) id. Intended to be used as part of
+    the deploy and configure chaperone VIO role. This module will get the vdnscope id and
+    output as an ansible variable to be used in later tasks
+author: VMware
+version_added: 2.1
+requirements: 
+  - requests
+  - ElementTree
+  - json
 options:
     nsx_manager:
         description:
@@ -46,9 +55,9 @@ options:
     nsx_api_version:
         description:
             - NSX api version
-        choices: 2.0, 1.0
+        choices: [2.0, 1.0]
         required: True
-    vdnscope_name
+    vdnscope_name:
         description:
             - The name of the vdn scope you need the ID of
         required: True
@@ -58,11 +67,9 @@ options:
             - valid ansible variable name for the vdnscope id
         required: True
         type: str
-
-requirements: requests, ElementTree, json
 '''
 
-EXAMPLE = '''
+EXAMPLES = '''
 - name: Get Transport Zone Id
   nsx_vds_id:
     nsx_manager: "{{ vio_nsx_manager_ip }}"
@@ -74,6 +81,13 @@ EXAMPLE = '''
 
 - name: Debug vdnscope id variable
   debug: var=vdnscop_id
+'''
+
+RETURN = '''
+description: Returns the vdnscope id for the named vdnscope name
+returned: object_id
+type: str
+sample: vdnscope-123
 '''
 
 
@@ -137,7 +151,7 @@ def main():
     argument_spec = dict(
         nsx_manager=dict(type='str', required=True),
         nsx_manager_username=dict(type='str', required=True),
-        nsx_manager_password=dict(type='str', required=True),
+        nsx_manager_password=dict(type='str', required=True, no_log=True),
         nsx_api_version=dict(type='str', default="2.0"),
         vdnscope_name=dict(type='str', required=True),
         ansible_variable_name=dict(type='str'),
@@ -177,5 +191,3 @@ from ansible.module_utils.facts import *
 
 if __name__ == '__main__':
     main()
-
-

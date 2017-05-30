@@ -19,7 +19,7 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
 DOCUMENTATION = '''
-module: vcenter_addvmk
+module: vcenter_vmk
 short_description: add vmkernel adapter to host and specified portgroup on vds
 description:
     - Add vmkernel adapter to a host that has been configured on a vds
@@ -91,9 +91,9 @@ options:
 '''
 
 
-EXAMPLE = '''
+EXAMPLES = '''
 - name: Add vmkernel adapter to host on specified portgroup
-  vcenter_addvmk:
+  vcenter_vmk:
     hostname: "{{ vcenter }}"
     username: "{{ vcenter_user }}"
     password: "{{ vcenter_password }}"

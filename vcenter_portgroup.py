@@ -102,16 +102,12 @@ except ImportError:
     HAS_PYVMOMI = False
 
 
-pgTypeMap = {
-    'static': 'earlyBinding',
-    'dynamic': 'lateBinding',
-    'ephemeral': 'ephemeral',
-}
+pgTypeMap = {'static': 'earlyBinding',
+             'dynamic': 'lateBinding',
+             'ephemeral': 'ephemeral',}
 
-pg_allocation = {
-    'elastic': True,
-    'fixed': False,
-}
+pg_allocation = {'elastic': True,
+                 'fixed': False,}
 
 
 def find_vds_by_name(content, vds_name):
@@ -150,11 +146,8 @@ def check_pg_spec(si, module):
     pg_name = module.params['port_group_name']
     pg = find_vdspg_by_name(vds, pg_name)
 
-    check_vals = [
-        (pgTypeMap[module.params['port_binding']] == pg.config.type),
-        (pg_allocation[module.params['port_allocation']] == pg.config.autoExpand),
-        (module.params['numPorts'] == pg.config.numPorts),
-    ]
+    check_vals = [(pgTypeMap[module.params['port_binding']] == pg.config.type),
+                  (pg_allocation[module.params['port_allocation']] == pg.config.autoExpand),]
 
     if False in check_vals:
         state = False
